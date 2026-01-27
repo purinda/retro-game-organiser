@@ -70,21 +70,43 @@ Examples:
 def print_summary(result: ConsolidationResult, dry_run: bool = False) -> None:
     """Print a summary of the consolidation results."""
     action = "Would copy" if dry_run else "Copied"
-    
+
     print("\n" + "=" * 60)
     print("CONSOLIDATION SUMMARY")
     print("=" * 60)
     print(f"  {action}: {result.copied} files")
     print(f"  Duplicates skipped: {result.skipped_duplicates}")
-    
+
     if result.errors:
         print(f"  Errors: {len(result.errors)}")
         for error in result.errors[:10]:  # Show first 10 errors
             print(f"    - {error}")
         if len(result.errors) > 10:
             print(f"    ... and {len(result.errors) - 10} more errors")
-    
-    print("=" * 60)
+
+    # Group copied files by source directory
+    if result.copied_files:
+        print("\n" + "-" * 60)
+        print("FILES BY SOURCE DIRECTORY")
+        print("-" * 60)
+
+        # Group by source directory
+        by_source: dict[str, list[tuple[str, str]]] = {}
+        for system, filename, dest, source in result.copied_files:
+            if source not in by_source:
+                by_source[source] = []
+            by_source[source].append((system, filename))
+
+        for source_dir, files in sorted(by_source.items()):
+            print(f"\n  From: {source_dir}")
+            print(f"  Games copied: {len(files)}")
+            # Show first 10 files per source
+            for system, filename in files[:10]:
+                print(f"    - [{system}] {filename}")
+            if len(files) > 10:
+                print(f"    ... and {len(files) - 10} more")
+
+    print("\n" + "=" * 60)
 
 
 def main() -> int:

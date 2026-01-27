@@ -132,6 +132,7 @@ SYSTEMS = {
     "prboom": "prBoom (Doom port)",
     "psp": "Sony PlayStation Portable",
     "psx": "Sony PlayStation",
+    "ps1": "Sony PlayStation",  # Alias for psx
     "pv1000": "Casio PV-1000",
     "pygame": "PyGame games",
     "quake3": "Quake III Arena (port)",
@@ -246,23 +247,44 @@ def normalize_system_key(key: str) -> str:
 def get_system_info(system_key: str) -> tuple[str, str] | None:
     """
     Get system information for a given key.
-    
+
+    Matching priority:
+    1. Exact match
+    2. Case-insensitive exact match
+    3. Contains match (e.g., "Nintendo - N64" contains "n64")
+
     Args:
-        system_key: The system folder name (e.g., 'psp', 'PSP', 'amiga500')
-        
+        system_key: The system folder name (e.g., 'psp', 'PSP', 'Nintendo - N64')
+
     Returns:
         Tuple of (shorthand, full_name) or None if not found
     """
     # First try exact match
     if system_key in SYSTEMS:
         return (system_key, SYSTEMS[system_key])
-    
-    # Try case-insensitive match
+
+    # Try case-insensitive exact match
     lower_key = normalize_system_key(system_key)
     for key, value in SYSTEMS.items():
         if normalize_system_key(key) == lower_key:
             return (key, value)
-    
+
+    # Try contains match - check if directory name contains any known system key
+    # Sort by key length descending to match longer keys first (e.g., "mastersystem" before "master")
+    sorted_keys = sorted(SYSTEMS.keys(), key=len, reverse=True)
+
+    # Normalize: remove spaces and special chars for comparison
+    normalized_input = lower_key.replace(" ", "").replace("-", "").replace("_", "")
+
+    for key in sorted_keys:
+        # Skip very short keys (1-2 chars) to avoid false matches
+        if len(key) <= 2:
+            continue
+        key_lower = key.lower()
+        # Check both: key in original, and key in normalized (spaces removed)
+        if key_lower in lower_key or key_lower in normalized_input:
+            return (key, SYSTEMS[key])
+
     return None
 
 

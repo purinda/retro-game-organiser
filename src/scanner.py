@@ -16,32 +16,33 @@ from .normalizer import parse_game_filename, GameInfo
 @dataclass
 class RomFile:
     """Represents a ROM file with its metadata."""
-    
+
     path: Path  # Full path to the ROM file
     filename: str  # Original filename
     system_key: str  # System folder name (e.g., 'psp', 'amiga500')
     game_info: GameInfo  # Parsed game information
-    
+    source_root: Path  # Root directory this ROM was found in
+
     @property
     def extension(self) -> str:
         """Get the file extension."""
         return self.path.suffix.lower()
-    
+
     @property
     def normalized_name(self) -> str:
         """Get the base game name (for display)."""
         return self.game_info.base_name
-    
+
     @property
     def dedup_key(self) -> str:
         """Get the deduplication key (includes region/version)."""
         return self.game_info.dedup_key
-    
+
     @property
     def similarity_key(self) -> str:
         """Get the similarity key (just base name, for grouping)."""
         return self.game_info.similarity_key
-    
+
     @property
     def clean_filename(self) -> str:
         """Get the cleaned filename (prefix removed)."""
@@ -66,41 +67,42 @@ def scan_rom_directory(source_dir: Path) -> Iterator[RomFile]:
         RomFile objects for each ROM found
     """
     source_dir = Path(source_dir)
-    
+
     if not source_dir.exists():
         raise FileNotFoundError(f"ROM directory not found: {source_dir}")
-    
+
     if not source_dir.is_dir():
         raise NotADirectoryError(f"Not a directory: {source_dir}")
-    
+
     # Iterate through system folders
     for system_folder in source_dir.iterdir():
         if not system_folder.is_dir():
             continue
-        
+
         system_key = system_folder.name
-        
+
         # Skip hidden folders and special directories
         if system_key.startswith('.') or system_key.startswith('_'):
             continue
-        
+
         # Recursively find all files in the system folder
         for root, dirs, files in os.walk(system_folder):
             # Skip hidden directories
             dirs[:] = [d for d in dirs if not d.startswith('.') and not d.startswith('_')]
-            
+
             for filename in files:
                 # Skip hidden files and info files
                 if filename.startswith('.') or filename.startswith('_'):
                     continue
-                
+
                 filepath = Path(root) / filename
-                
+
                 yield RomFile(
                     path=filepath,
                     filename=filename,
                     system_key=system_key,
                     game_info=parse_game_filename(filename),
+                    source_root=source_dir,
                 )
 
 

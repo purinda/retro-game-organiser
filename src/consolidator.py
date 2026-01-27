@@ -17,13 +17,15 @@ from .systems import get_output_folder_name
 @dataclass
 class ConsolidationResult:
     """Results from a consolidation operation."""
-    
+
     copied: int = 0
     skipped_duplicates: int = 0
     skipped_unknown_system: int = 0
     errors: list[str] = field(default_factory=list)
-    copied_files: list[tuple[str, str, str]] = field(default_factory=list)  # (system, filename, dest)
-    duplicate_files: list[tuple[str, str, str]] = field(default_factory=list)  # (system, filename, original)
+    # (system, filename, dest, source_dir)
+    copied_files: list[tuple[str, str, str, str]] = field(default_factory=list)
+    # (system, filename, original)
+    duplicate_files: list[tuple[str, str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -46,7 +48,7 @@ class Consolidator:
     Region-aware: keeps different region variants as unique games.
     E.g., "Game (USA).bin" and "Game (EU).bin" are both kept.
     """
-    
+
     def __init__(self, output_dir: Path, options: ConsolidationOptions | None = None):
         """
         Initialize the consolidator.
@@ -57,18 +59,18 @@ class Consolidator:
         """
         self.output_dir = Path(output_dir)
         self.options = options or ConsolidationOptions()
-        
+
         # Track seen games: key is (normalized_system_key, dedup_key)
         # dedup_key includes region/version, so different regions are NOT duplicates
         self._seen: dict[tuple[str, str], RomFile] = {}
-        
+
         self.result = ConsolidationResult()
-    
+
     def _log(self, message: str) -> None:
         """Log a message if verbose mode is enabled."""
         if self.options.verbose and self.options.progress_callback:
             self.options.progress_callback(message)
-    
+
     def _normalize_system_for_dedup(self, system_key: str) -> str:
         """
         Normalize system key for deduplication purposes.
@@ -76,7 +78,7 @@ class Consolidator:
         Maps equivalent systems to the same key (e.g., PSP and psp).
         """
         return system_key.lower()
-    
+
     def _is_duplicate(self, rom: RomFile) -> RomFile | None:
         """
         Check if a ROM is a duplicate.
@@ -94,9 +96,9 @@ class Consolidator:
             self._normalize_system_for_dedup(rom.system_key),
             rom.dedup_key
         )
-        
+
         return self._seen.get(full_key)
-    
+
     def _mark_seen(self, rom: RomFile) -> None:
         """Mark a ROM as seen for deduplication."""
         full_key = (
@@ -104,7 +106,7 @@ class Consolidator:
             rom.dedup_key
         )
         self._seen[full_key] = rom
-    
+
     def _copy_rom(self, rom: RomFile) -> bool:
         """
         Copy a ROM file to the output directory.
@@ -120,33 +122,35 @@ class Consolidator:
         # Get the output folder name
         output_folder = get_output_folder_name(rom.system_key)
         dest_dir = self.output_dir / output_folder
-        
+
         # Use clean filename (prefix removed, but region/version preserved)
         dest_filename = rom.clean_filename
         dest_path = dest_dir / dest_filename
-        
+
         try:
             if not self.options.dry_run:
                 # Create destination directory
                 dest_dir.mkdir(parents=True, exist_ok=True)
-                
+
                 # Check if destination exists
                 if dest_path.exists() and not self.options.overwrite:
                     self._log(f"  Skipping (exists): {dest_filename}")
                     return False
-                
+
                 # Copy the file
                 shutil.copy2(rom.path, dest_path)
-            
+
             self.result.copied += 1
-            self.result.copied_files.append((rom.system_key, dest_filename, str(dest_path)))
+            self.result.copied_files.append(
+                (rom.system_key, dest_filename, str(dest_path), str(rom.source_root))
+            )
             self._log(f"  Copied: {rom.filename} -> {output_folder}/{dest_filename}")
             return True
-            
+
         except Exception as e:
             self.result.errors.append(f"Error copying {rom.path}: {e}")
             return False
-    
+
     def consolidate(self, source_dirs: list[Path]) -> ConsolidationResult:
         """
         Consolidate ROM files from multiple source directories.
@@ -158,12 +162,12 @@ class Consolidator:
             ConsolidationResult with statistics
         """
         self._log(f"Scanning {len(source_dirs)} source directories...")
-        
+
         # Process each ROM file
         for rom in scan_multiple_directories(source_dirs):
             # Check for duplicates (same base name + same region/version)
             original = self._is_duplicate(rom)
-            
+
             if original:
                 self.result.skipped_duplicates += 1
                 self.result.duplicate_files.append(
@@ -171,11 +175,11 @@ class Consolidator:
                 )
                 self._log(f"  Duplicate: {rom.filename} (original: {original.filename})")
                 continue
-            
+
             # Mark as seen and copy
             self._mark_seen(rom)
             self._copy_rom(rom)
-        
+
         return self.result
 
 
