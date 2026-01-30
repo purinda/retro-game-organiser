@@ -5,6 +5,7 @@ A Python CLI tool to consolidate multiple ROM sets into a single organized direc
 ## Features
 
 - **Multiple Input Sources**: Accept multiple ROM set directories
+- **Systems Filter**: Consolidate only specific systems (e.g., `--systems gb,gba,gbc`)
 - **Region-Aware Deduplication**: 
   - Keeps all unique region variants (e.g., both `Game (USA)` and `Game (EU)`)
   - Only removes exact duplicates (same game + same region)
@@ -34,6 +35,12 @@ python -m src.main \
     --input /path/to/romset1 \
     --input /path/to/romset2 \
     --output /path/to/consolidated
+
+# Consolidate only specific systems
+python -m src.main \
+    --input /path/to/romset1 \
+    --output /path/to/consolidated \
+    --systems gb,gba,gbc,gamecom
 ```
 
 ## Example

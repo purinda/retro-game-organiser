@@ -54,7 +54,7 @@ SYSTEMS = {
     "ecwolf": "ECWolf (Wolfenstein 3D port)",
     "eduke32": "EDuke32 (Duke Nukem 3D port)",
     "electron": "Acorn Electron",
-    "emulators": "(meta/folder)",
+    "emulators": "emulators",
     "fallout1-ce": "Fallout 1 Community Edition (port)",
     "fallout2-ce": "Fallout 2 Community Edition (port)",
     "fbneo": "FinalBurn Neo (arcade)",
@@ -320,3 +320,71 @@ def is_known_system(system_key: str) -> bool:
         True if known, False otherwise
     """
     return get_system_info(system_key) is not None
+
+
+# Mapping from our system keys to Libretro thumbnail repository names
+# See: https://github.com/libretro-thumbnails
+LIBRETRO_SYSTEM_MAP = {
+    "3do": "The_3DO_Company_-_3DO",
+    "atari2600": "Atari_-_2600",
+    "atari5200": "Atari_-_5200",
+    "atari7800": "Atari_-_7800",
+    "atarilynx": "Atari_-_Lynx",
+    "lynx": "Atari_-_Lynx",
+    "colecovision": "Coleco_-_ColecoVision",
+    "dreamcast": "Sega_-_Dreamcast",
+    "fds": "Nintendo_-_Family_Computer_Disk_System",
+    "gamegear": "Sega_-_Game_Gear",
+    "gb": "Nintendo_-_Game_Boy",
+    "gba": "Nintendo_-_Game_Boy_Advance",
+    "gbc": "Nintendo_-_Game_Boy_Color",
+    "gamecom": "Tiger_-_Game.com",
+    "genesis": "Sega_-_Mega_Drive_-_Genesis",
+    "megadrive": "Sega_-_Mega_Drive_-_Genesis",
+    "intellivision": "Mattel_-_Intellivision",
+    "jaguar": "Atari_-_Jaguar",
+    "mastersystem": "Sega_-_Master_System_-_Mark_III",
+    "n64": "Nintendo_-_Nintendo_64",
+    "nds": "Nintendo_-_Nintendo_DS",
+    "neogeo": "SNK_-_Neo_Geo",
+    "neogeocd": "SNK_-_Neo_Geo_CD",
+    "nes": "Nintendo_-_Nintendo_Entertainment_System",
+    "ngp": "SNK_-_Neo_Geo_Pocket",
+    "ngpc": "SNK_-_Neo_Geo_Pocket_Color",
+    "pcengine": "NEC_-_PC_Engine_-_TurboGrafx_16",
+    "pcenginecd": "NEC_-_PC_Engine_CD_-_TurboGrafx-CD",
+    "pokemini": "Nintendo_-_Pokemon_Mini",
+    "psp": "Sony_-_PlayStation_Portable",
+    "psx": "Sony_-_PlayStation",
+    "ps1": "Sony_-_PlayStation",
+    "saturn": "Sega_-_Saturn",
+    "sega32x": "Sega_-_32X",
+    "segacd": "Sega_-_Mega-CD_-_Sega_CD",
+    "sg1000": "Sega_-_SG-1000",
+    "snes": "Nintendo_-_Super_Nintendo_Entertainment_System",
+    "sfc": "Nintendo_-_Super_Nintendo_Entertainment_System",
+    "vectrex": "GCE_-_Vectrex",
+    "virtualboy": "Nintendo_-_Virtual_Boy",
+    "wswan": "Bandai_-_WonderSwan",
+    "wswanc": "Bandai_-_WonderSwan_Color",
+}
+
+
+def get_libretro_system_name(system_key: str) -> str | None:
+    """
+    Get the Libretro thumbnail repository name for a system.
+
+    Args:
+        system_key: The system key (e.g., 'gb', 'gba', 'psp')
+
+    Returns:
+        Libretro system name (e.g., 'Nintendo_-_Game_Boy') or None if not mapped
+    """
+    # First, try to get the canonical system key
+    system_info = get_system_info(system_key)
+    if system_info:
+        canonical_key = system_info[0].lower()
+    else:
+        canonical_key = system_key.lower()
+
+    return LIBRETRO_SYSTEM_MAP.get(canonical_key)
