@@ -1,73 +1,89 @@
-# ROM Consolidation Tool
+# ROM Consolidation & BoxArt Downloader Tool
 
-A Python CLI tool to consolidate multiple ROM sets into a single organized directory, with smart region-aware duplicate detection.
+A Python CLI tool to consolidate multiple ROM sets into a single organized directory, with smart region-aware duplicate detection and thumbnail downloading from Libretro.
 
 ## Features
 
 - **Multiple Input Sources**: Accept multiple ROM set directories
-- **Systems Filter**: Consolidate only specific systems (e.g., `--systems gb,gba,gbc`)
-- **Region-Aware Deduplication**: 
-  - Keeps all unique region variants (e.g., both `Game (USA)` and `Game (EU)`)
-  - Only removes exact duplicates (same game + same region)
-  - Strips numeric prefixes like `001 ` but preserves region info
-- **Directory Flattening**: Handles subdirectories within system folders
-- **Organized Output**: Creates folders with format `SHORTHAND-Full Name` (e.g., `PSP-Sony PlayStation Portable`)
-- **Dry Run Mode**: Preview changes without copying files
+- **Systems Filter**: Process only specific systems (e.g., `--systems gb,gba,gbc`)
+- **Region-Aware Deduplication**: Keeps regional variants, removes exact duplicates
+- **Thumbnail Downloads**: Fetch box art, screenshots, and title screens from Libretro
+- **Organized Output**: Creates folders with format `SHORTHAND-Full Name`
+- **Dry Run Mode**: Preview changes without copying/downloading
 
 ## Quick Start
 
 ```bash
-# Clone and setup
+# Setup
 cd /Users/purinda/src/retro-game-organiser
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+```
 
+## Commands
+
+### Consolidate ROMs
+
+```bash
 # Preview consolidation (dry run)
-python -m src.main \
+python -m src.main consolidate \
     --input /path/to/romset1 \
     --input /path/to/romset2 \
     --output /path/to/consolidated \
     --dry-run --verbose
 
 # Actual consolidation
-python -m src.main \
+python -m src.main consolidate \
     --input /path/to/romset1 \
-    --input /path/to/romset2 \
     --output /path/to/consolidated
 
 # Consolidate only specific systems
-python -m src.main \
+python -m src.main consolidate \
     --input /path/to/romset1 \
     --output /path/to/consolidated \
-    --systems gb,gba,gbc,gamecom
+    --systems gb,gba,gbc
 ```
 
-## Example
+### Download Thumbnails
 
-Given these input ROM sets:
+Download game artwork from the [Libretro Thumbnails Server](https://github.com/libretro-thumbnails):
 
+```bash
+# Download box art for all systems
+python -m src.main thumbnails \
+    --input /path/to/consolidated \
+    --type boxart
+
+# Download screenshots for Game Boy systems only
+python -m src.main thumbnails \
+    --input /path/to/consolidated \
+    --systems gb,gba,gbc \
+    --type snap
+
+# Preview without downloading
+python -m src.main thumbnails \
+    --input /path/to/consolidated \
+    --dry-run --verbose
 ```
-romset1/saturn/
-├── Game (USA).bin
-└── Game (Europe).bin
 
-romset2/saturn/
-├── 001 Game (USA).bin  # Duplicate (same region as Game (USA).bin)
-└── Game (Japan).bin    # Unique (different region)
+**Thumbnail types:**
+- `boxart` - Box art / cover images
+- `snap` - In-game screenshots
+- `title` - Title screen images
+
+**Output structure:**
+```
+consolidated/
+  gb-Nintendo Game Boy/
+    images/
+      boxarts/
+        Pokemon Red (USA).png
+      snaps/
+        Pokemon Red (USA).png
 ```
 
-Output:
-```
-consolidated/saturn-Sega Saturn/
-├── Game (USA).bin
-├── Game (Europe).bin
-└── Game (Japan).bin
-```
-
-Note: `001 Game (USA).bin` was skipped (duplicate of `Game (USA).bin`).
-
-## Duplicate Detection Logic
+## Duplicate Detection
 
 Two files are duplicates if they have:
 1. Same system (case-insensitive)
@@ -84,3 +100,4 @@ python -m pytest tests/ -v
 ## Supported Systems
 
 150+ retro gaming systems. See `src/systems.py` for the complete list.
+Thumbnail support for 50+ systems via Libretro mapping.
