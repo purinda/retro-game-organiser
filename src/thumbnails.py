@@ -10,9 +10,11 @@ import re
 import urllib.request
 import urllib.parse
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Callable
+import threading
 
 from .systems import get_libretro_system_name, get_system_info
 from .normalizer import parse_game_filename
@@ -57,6 +59,7 @@ class ThumbnailOptions:
     overwrite: bool = False
     progress_callback: Callable[[str], None] | None = None
     systems_filter: list[str] | None = None
+    max_workers: int = 5  # Number of concurrent downloads
 
 
 def normalize_for_matching(name: str) -> str:
@@ -248,6 +251,7 @@ class ThumbnailDownloader:
         self.options = options or ThumbnailOptions()
         self.result = ThumbnailResult()
         self._cache = ThumbnailCache()
+        self._lock = threading.Lock()  # For thread-safe result updates
 
     def _log(self, message: str) -> None:
         """Log a message if verbose mode is enabled."""
@@ -273,17 +277,38 @@ class ThumbnailDownloader:
         clean_name = game_info.clean_filename
         return Path(clean_name).stem
 
-    def _download_file(self, url: str, dest_path: Path) -> bool:
+    def _download_file(self, url: str, dest_path: Path) -> tuple[bool, str | None]:
         """Download a file from URL to destination path."""
         try:
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             with urllib.request.urlopen(url, timeout=30) as response:
                 with open(dest_path, "wb") as f:
                     f.write(response.read())
-            return True
+            return True, None
         except Exception as e:
-            self.result.errors.append(f"Error downloading {url}: {e}")
-            return False
+            return False, f"Error downloading {url}: {e}"
+
+    def _download_task(self, task: tuple) -> dict:
+        """
+        Execute a single download task.
+
+        Args:
+            task: Tuple of (system_key, game_name, url, dest_path, matched)
+
+        Returns:
+            Dict with result info
+        """
+        system_key, game_name, url, dest_path, matched = task
+        success, error = self._download_file(url, Path(dest_path))
+
+        return {
+            "success": success,
+            "error": error,
+            "system_key": system_key,
+            "game_name": game_name,
+            "dest_path": dest_path,
+            "matched": matched,
+        }
 
     def _build_download_url(
         self, libretro_system: str, thumbnail_type: str, filename: str
@@ -297,6 +322,7 @@ class ThumbnailDownloader:
     def download_for_directory(self, rom_dir: Path) -> ThumbnailResult:
         """
         Download thumbnails for all ROMs in a consolidated directory.
+        Uses concurrent downloads for faster processing.
         """
         self._log(f"Scanning {rom_dir} for ROMs...")
 
@@ -304,6 +330,9 @@ class ThumbnailDownloader:
         type_folder = THUMBNAIL_TYPES.get(thumbnail_type, "Named_Boxarts").replace(
             "Named_", ""
         ).lower()
+
+        # Collect all download tasks first
+        download_tasks = []
 
         # Iterate through system folders
         for system_folder in sorted(rom_dir.iterdir()):
@@ -344,7 +373,7 @@ class ThumbnailDownloader:
             # Images destination
             images_dir = system_folder / "images" / type_folder
 
-            # Scan ROM files
+            # Scan ROM files and collect download tasks
             for rom_file in sorted(system_folder.iterdir()):
                 if not rom_file.is_file():
                     continue
@@ -383,20 +412,48 @@ class ThumbnailDownloader:
                         (system_key, game_name, str(dest_path))
                     )
                 else:
-                    if self._download_file(url, dest_path):
-                        self.result.downloaded += 1
-                        self.result.downloaded_files.append(
-                            (system_key, game_name, str(dest_path))
-                        )
-                        if matched != game_name:
+                    # Add to download queue
+                    download_tasks.append(
+                        (system_key, game_name, url, str(dest_path), matched)
+                    )
+
+        # Execute downloads concurrently
+        if download_tasks and not self.options.dry_run:
+            self._log(
+                f"\nDownloading {len(download_tasks)} thumbnails ({self.options.max_workers} concurrent)..."
+            )
+
+            with ThreadPoolExecutor(max_workers=self.options.max_workers) as executor:
+                futures = {
+                    executor.submit(self._download_task, task): task
+                    for task in download_tasks
+                }
+
+                for future in as_completed(futures):
+                    result = future.result()
+
+                    if result["success"]:
+                        with self._lock:
+                            self.result.downloaded += 1
+                            self.result.downloaded_files.append(
+                                (
+                                    result["system_key"],
+                                    result["game_name"],
+                                    result["dest_path"],
+                                )
+                            )
+                        if result["matched"] != result["game_name"]:
                             self._log(
-                                f"    Downloaded: {game_name}.png (matched: {matched})"
+                                f"    Downloaded: {result['game_name']}.png (matched: {result['matched']})"
                             )
                         else:
-                            self._log(f"    Downloaded: {game_name}.png")
+                            self._log(f"    Downloaded: {result['game_name']}.png")
                     else:
-                        self.result.skipped_not_found += 1
-                        self._log(f"    Failed: {game_name}.png")
+                        with self._lock:
+                            self.result.skipped_not_found += 1
+                            if result["error"]:
+                                self.result.errors.append(result["error"])
+                        self._log(f"    Failed: {result['game_name']}.png")
 
         # Add cache errors to result
         self.result.errors.extend(self._cache._errors)
@@ -411,9 +468,19 @@ def download_thumbnails(
     verbose: bool = False,
     systems_filter: list[str] | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    max_workers: int = 5,
 ) -> ThumbnailResult:
     """
     Convenience function to download thumbnails.
+
+    Args:
+        rom_dir: Directory containing consolidated ROMs
+        thumbnail_type: Type of thumbnail (boxart, snap, title)
+        dry_run: Preview without downloading
+        verbose: Show detailed progress
+        systems_filter: List of systems to process
+        progress_callback: Optional callback for progress messages
+        max_workers: Number of concurrent downloads (default: 5)
     """
     if systems_filter:
         systems_filter = [s.lower() for s in systems_filter]
@@ -424,6 +491,7 @@ def download_thumbnails(
         thumbnail_type=thumbnail_type,
         systems_filter=systems_filter,
         progress_callback=progress_callback or (print if verbose else None),
+        max_workers=max_workers,
     )
 
     downloader = ThumbnailDownloader(options)

@@ -177,6 +177,7 @@ def cmd_thumbnails(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             verbose=args.verbose,
             systems_filter=systems_filter,
+            max_workers=args.workers,
         )
 
         print_thumbnail_summary(result, args.dry_run)
@@ -293,6 +294,14 @@ Examples:
         default=None,
         metavar="SYSTEMS",
         help="Comma-separated list of systems to process (e.g., gb,gba,gbc)",
+    )
+    thumbnails_parser.add_argument(
+        "--workers",
+        "-w",
+        type=int,
+        default=5,
+        metavar="N",
+        help="Number of concurrent downloads (default: 5)",
     )
 
     return parser
