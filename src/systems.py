@@ -357,6 +357,7 @@ LIBRETRO_SYSTEM_MAP = {
     "psp": "Sony_-_PlayStation_Portable",
     "psx": "Sony_-_PlayStation",
     "ps1": "Sony_-_PlayStation",
+    "ps": "Sony_-_PlayStation",
     "saturn": "Sega_-_Saturn",
     "sega32x": "Sega_-_32X",
     "segacd": "Sega_-_Mega-CD_-_Sega_CD",

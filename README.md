@@ -174,6 +174,42 @@ python -m src.main thumbnails \
 | `snap` | In-game screenshots |
 | `title` | Title screen images |
 
+### How Thumbnail Matching Works
+
+The thumbnail downloader fetches the complete list of available images from the [Libretro Thumbnails](https://github.com/libretro-thumbnails) repository and matches your ROM filenames using intelligent fuzzy matching.
+
+**Matching Priority Order:**
+
+| Priority | Match Type | Description |
+|----------|------------|-------------|
+| 1 | Exact Match | Case-insensitive exact filename match |
+| 2 | Base Name | Strips region/version info (parentheses) and matches |
+| 3 | Normalized | Removes all non-alphanumeric characters for comparison |
+| 4 | Base Normalized | Combines base name + normalization |
+| 5 | Partial/Prefix | Matches if base names are substrings |
+
+**Examples of Successful Matches:**
+
+| Your ROM Filename | Matched Thumbnail on Server |
+|-------------------|----------------------------|
+| `Blade.chd` | `Blade (USA).png` |
+| `FIFA 2000 - Major League Soccer (USA).chd` | `FIFA 2000 - Major League Soccer (USA) (En,De,Es,Nl,Sv).png` |
+| `Iron Man X-O Manowar In Heavy Metal (USA).chd` | `Iron Man _ X-O Manowar in Heavy Metal (USA).png` |
+| `Pokemon Red Version (USA).gb` | `Pokemon Red Version (USA, Europe).png` |
+| `Tetris.gb` | `Tetris (World).png` |
+
+> [!WARNING]
+> **Potential Mismatches**: If your ROM filename is too generic (e.g., just `Blade` without region), the matcher may download artwork for a different game with a similar name. For best results:
+> - Keep region codes in filenames (e.g., `(USA)`, `(Europe)`)
+> - Use full game titles rather than abbreviations
+> - Run with `--dry-run --verbose` first to verify matches
+
+**Why We Use Server-Side File Lists:**
+- Libretro uses inconsistent naming (e.g., `X-O` → `X _ O`, `In` → `in`)
+- Some games have multiple language codes (e.g., `(En,De,Es,Nl,Sv)`)
+- Server filenames may differ from standard ROM naming conventions
+- Fetching the actual file list ensures we only download thumbnails that exist
+
 ---
 
 ## How Duplicate Detection Works
@@ -206,7 +242,7 @@ Over 150 retro gaming systems are supported. Common examples:
 | `nes` | Nintendo Entertainment System |
 | `snes` | Super Nintendo Entertainment System |
 | `n64` | Nintendo 64 |
-| `psx` / `ps1` | Sony PlayStation |
+| `psx` / `ps1` / `ps` | Sony PlayStation |
 | `psp` | Sony PlayStation Portable |
 | `genesis` / `megadrive` | Sega Genesis / Mega Drive |
 | `saturn` | Sega Saturn |
@@ -228,6 +264,7 @@ python -m pytest tests/ -v
 ## Tips
 
 1. **Always do a dry run first** with `--dry-run --verbose` to preview changes
-2. **Use systems filter** to process only what you need
-3. **Thumbnails may not exist** for all games - 404 errors are normal
-4. **Folder names matter** - ensure your source ROM folders use recognized system names
+2. **Use systems filter** (`--systems gb,gba`) to process only what you need
+3. **Check matched filenames** in verbose output to ensure correct thumbnails
+4. **Keep region codes** in ROM filenames for accurate thumbnail matching
+5. **Folder names matter** - ensure your source ROM folders use recognized system names

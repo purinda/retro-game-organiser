@@ -5,6 +5,8 @@ Downloads box art, screenshots, and title screens from:
 https://github.com/libretro-thumbnails
 """
 
+import json
+import re
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -18,6 +20,7 @@ from .normalizer import parse_game_filename
 
 # Base URL for Libretro thumbnails (raw GitHub content)
 LIBRETRO_BASE_URL = "https://raw.githubusercontent.com/libretro-thumbnails"
+GITHUB_API_URL = "https://api.github.com/repos/libretro-thumbnails"
 
 # Thumbnail type mapping
 THUMBNAIL_TYPES = {
@@ -27,7 +30,6 @@ THUMBNAIL_TYPES = {
 }
 
 # Characters that need to be replaced in filenames for Libretro URLs
-# See: https://docs.libretro.com/guides/roms-playlists-thumbnails/
 LIBRETRO_INVALID_CHARS = '&*/:`<>?\\|"'
 
 
@@ -57,48 +59,184 @@ class ThumbnailOptions:
     systems_filter: list[str] | None = None
 
 
-def sanitize_for_libretro(filename: str) -> str:
+def normalize_for_matching(name: str) -> str:
     """
-    Convert a filename to Libretro-compatible format.
+    Normalize a name for fuzzy matching.
 
-    Libretro replaces certain characters with underscores in their thumbnail filenames.
+    Removes all non-alphanumeric characters and lowercases.
 
     Args:
-        filename: The original filename (without extension)
+        name: The name to normalize
 
     Returns:
-        Sanitized filename for Libretro URL
+        Normalized string for comparison
     """
-    result = filename
-    for char in LIBRETRO_INVALID_CHARS:
-        result = result.replace(char, "_")
-    return result
+    return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
-def get_thumbnail_url(system_key: str, game_name: str, thumbnail_type: str) -> str | None:
+def extract_base_name(name: str) -> str:
     """
-    Build the URL for a game's thumbnail on the Libretro server.
+    Extract the base name without region/version info.
+
+    Removes content in parentheses and brackets.
 
     Args:
-        system_key: Our system key (e.g., 'gb', 'gba')
-        game_name: The game name (without extension, with region info)
-        thumbnail_type: Type of thumbnail ('boxart', 'snap', 'title')
+        name: The full name with region info
 
     Returns:
-        Full URL to the thumbnail, or None if system not mapped
+        Base name only
     """
-    libretro_system = get_libretro_system_name(system_key)
-    if not libretro_system:
+    # Remove content in parentheses and brackets
+    result = re.sub(r"\s*\([^)]*\)", "", name)
+    result = re.sub(r"\s*\[[^\]]*\]", "", result)
+    return result.strip()
+
+
+def match_thumbnail(game_name: str, available_files: list[str]) -> str | None:
+    """
+    Find the best matching thumbnail from available files.
+
+    Matching priority:
+    1. Exact match (case-insensitive)
+    2. Match base name (without region/version info)
+    3. Match alphanumeric only (fuzzy)
+
+    Args:
+        game_name: The ROM game name (without extension)
+        available_files: List of available thumbnail filenames (without .png)
+
+    Returns:
+        Best matching filename or None if no match found
+    """
+    if not available_files:
         return None
 
-    libretro_type = THUMBNAIL_TYPES.get(thumbnail_type, "Named_Boxarts")
-    sanitized_name = sanitize_for_libretro(game_name)
+    game_name_lower = game_name.lower()
+    game_base = extract_base_name(game_name)
+    game_base_lower = game_base.lower()
+    game_normalized = normalize_for_matching(game_name)
+    game_base_normalized = normalize_for_matching(game_base)
 
-    # URL encode the components
-    encoded_system = urllib.parse.quote(libretro_system)
-    encoded_name = urllib.parse.quote(sanitized_name)
+    # Build lookup structures
+    exact_lookup = {f.lower(): f for f in available_files}
+    base_lookup = {extract_base_name(f).lower(): f for f in available_files}
+    normalized_lookup = {normalize_for_matching(f): f for f in available_files}
 
-    return f"{LIBRETRO_BASE_URL}/{encoded_system}/master/{libretro_type}/{encoded_name}.png"
+    # Priority 1: Exact match (case-insensitive)
+    if game_name_lower in exact_lookup:
+        return exact_lookup[game_name_lower]
+
+    # Priority 2: Base name match (same game, different region might work)
+    if game_base_lower in base_lookup:
+        return base_lookup[game_base_lower]
+
+    # Priority 3: Normalized (alphanumeric only) match
+    if game_normalized in normalized_lookup:
+        return normalized_lookup[game_normalized]
+
+    # Priority 4: Try base name normalized
+    if game_base_normalized in normalized_lookup:
+        return normalized_lookup[game_base_normalized]
+
+    # Priority 5: Our base name matches server file's base name (both normalized)
+    base_normalized_lookup = {
+        normalize_for_matching(extract_base_name(f)): f for f in available_files
+    }
+    if game_base_normalized in base_normalized_lookup:
+        return base_normalized_lookup[game_base_normalized]
+
+    # Priority 6: Partial match - find files whose base name starts with our game name
+    for avail in available_files:
+        avail_base = extract_base_name(avail)
+        avail_base_normalized = normalize_for_matching(avail_base)
+        # Check if server file starts with our game name
+        if avail_base_normalized.startswith(
+            game_base_normalized
+        ) or game_base_normalized.startswith(avail_base_normalized):
+            return avail
+
+    # Priority 7: Base name exact match (case-insensitive)
+    for avail in available_files:
+        avail_base = extract_base_name(avail)
+        if avail_base.lower() == game_base_lower:
+            return avail
+
+    return None
+
+
+class ThumbnailCache:
+    """Cache for available thumbnails per system."""
+
+    def __init__(self):
+        self._cache: dict[str, list[str]] = {}
+        self._errors: list[str] = []
+
+    def get_available_files(
+        self,
+        libretro_system: str,
+        thumbnail_type: str,
+        verbose_callback: Callable[[str], None] | None = None,
+    ) -> list[str]:
+        """
+        Get list of available thumbnails for a system.
+
+        Uses GitHub Git Trees API to get all files (supports up to 100k entries).
+
+        Args:
+            libretro_system: Libretro system name (e.g., 'Nintendo_-_Game_Boy')
+            thumbnail_type: Type of thumbnail ('boxart', 'snap', 'title')
+            verbose_callback: Optional callback for progress messages
+
+        Returns:
+            List of available thumbnail filenames (without .png extension)
+        """
+        libretro_type = THUMBNAIL_TYPES.get(thumbnail_type, "Named_Boxarts")
+        cache_key = f"{libretro_system}/{libretro_type}"
+
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        # Use Git Trees API for complete file list
+        # Format: /repos/{owner}/{repo}/git/trees/{branch}:{path}
+        api_url = f"{GITHUB_API_URL}/{libretro_system}/git/trees/master:{libretro_type}"
+
+        if verbose_callback:
+            verbose_callback("    Fetching file list from server...")
+
+        try:
+            req = urllib.request.Request(
+                api_url,
+                headers={
+                    "Accept": "application/vnd.github.v3+json",
+                    "User-Agent": "retro-game-organiser",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=60) as response:
+                data = json.loads(response.read().decode("utf-8"))
+
+            # Extract filenames from tree (remove .png extension)
+            files = []
+            for item in data.get("tree", []):
+                name = item.get("path", "")
+                if name.endswith(".png"):
+                    files.append(name[:-4])  # Remove .png
+
+            self._cache[cache_key] = files
+
+            if verbose_callback:
+                verbose_callback(f"    Found {len(files)} thumbnails available")
+
+            return files
+
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                self._cache[cache_key] = []
+                return []
+            self._errors.append(f"Error fetching {api_url}: {e}")
+            return []
+        except Exception as e:
+            self._errors.append(f"Error fetching {api_url}: {e}")
+            return []
 
 
 class ThumbnailDownloader:
@@ -107,14 +245,9 @@ class ThumbnailDownloader:
     """
 
     def __init__(self, options: ThumbnailOptions | None = None):
-        """
-        Initialize the downloader.
-
-        Args:
-            options: Download options
-        """
         self.options = options or ThumbnailOptions()
         self.result = ThumbnailResult()
+        self._cache = ThumbnailCache()
 
     def _log(self, message: str) -> None:
         """Log a message if verbose mode is enabled."""
@@ -135,76 +268,35 @@ class ThumbnailDownloader:
         return canonical_key in self.options.systems_filter
 
     def _get_game_name_from_file(self, filepath: Path) -> str:
-        """
-        Extract the game name for Libretro lookup from a ROM filename.
-
-        Uses the cleaned filename (prefix stripped) but keeps region/version info.
-        Removes the file extension.
-
-        Args:
-            filepath: Path to the ROM file
-
-        Returns:
-            Game name suitable for Libretro thumbnail lookup
-        """
+        """Extract the game name for lookup from a ROM filename."""
         game_info = parse_game_filename(filepath.name)
-        # Remove extension from clean filename
         clean_name = game_info.clean_filename
         return Path(clean_name).stem
 
     def _download_file(self, url: str, dest_path: Path) -> bool:
-        """
-        Download a file from URL to destination path.
-
-        Args:
-            url: URL to download from
-            dest_path: Destination file path
-
-        Returns:
-            True if successful, False otherwise
-        """
+        """Download a file from URL to destination path."""
         try:
-            # Create parent directory
             dest_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Download the file
             with urllib.request.urlopen(url, timeout=30) as response:
                 with open(dest_path, "wb") as f:
                     f.write(response.read())
             return True
-
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                return False  # Not found is expected for some games
-            self.result.errors.append(f"HTTP error downloading {url}: {e}")
-            return False
         except Exception as e:
             self.result.errors.append(f"Error downloading {url}: {e}")
             return False
 
+    def _build_download_url(
+        self, libretro_system: str, thumbnail_type: str, filename: str
+    ) -> str:
+        """Build the download URL for a matched thumbnail."""
+        libretro_type = THUMBNAIL_TYPES.get(thumbnail_type, "Named_Boxarts")
+        encoded_system = urllib.parse.quote(libretro_system)
+        encoded_name = urllib.parse.quote(filename)
+        return f"{LIBRETRO_BASE_URL}/{encoded_system}/master/{libretro_type}/{encoded_name}.png"
+
     def download_for_directory(self, rom_dir: Path) -> ThumbnailResult:
         """
         Download thumbnails for all ROMs in a consolidated directory.
-
-        Expected structure:
-            rom_dir/
-                system-Full Name/
-                    Game1.ext
-                    Game2.ext
-
-        Output structure:
-            rom_dir/
-                system-Full Name/
-                    images/
-                        boxart/
-                            Game1.png
-                        ...
-
-        Args:
-            rom_dir: Path to the consolidated ROM directory
-
-        Returns:
-            ThumbnailResult with statistics
         """
         self._log(f"Scanning {rom_dir} for ROMs...")
 
@@ -218,28 +310,36 @@ class ThumbnailDownloader:
             if not system_folder.is_dir():
                 continue
 
-            # Skip hidden and images folders
             if system_folder.name.startswith(".") or system_folder.name == "images":
                 continue
 
-            # Extract system key from folder name (format: "key-Full Name")
+            # Extract system key
             folder_name = system_folder.name
             if "-" in folder_name:
                 system_key = folder_name.split("-")[0]
             else:
                 system_key = folder_name
 
-            # Check filter
             if not self._is_system_allowed(system_key):
                 continue
 
-            # Check if system has Libretro mapping
             libretro_system = get_libretro_system_name(system_key)
             if not libretro_system:
                 self._log(f"  Skipping {folder_name}: No Libretro mapping")
                 continue
 
             self._log(f"Processing: {folder_name}")
+
+            # Get available thumbnails from server
+            available_files = self._cache.get_available_files(
+                libretro_system,
+                thumbnail_type,
+                self._log if self.options.verbose else None,
+            )
+
+            if not available_files:
+                self._log(f"    No thumbnails available for this system")
+                continue
 
             # Images destination
             images_dir = system_folder / "images" / type_folder
@@ -251,7 +351,6 @@ class ThumbnailDownloader:
                 if rom_file.name.startswith("."):
                     continue
 
-                # Get game name for lookup
                 game_name = self._get_game_name_from_file(rom_file)
                 dest_path = images_dir / f"{game_name}.png"
 
@@ -261,16 +360,24 @@ class ThumbnailDownloader:
                     self._log(f"    Exists: {game_name}.png")
                     continue
 
-                # Build URL
-                url = get_thumbnail_url(system_key, game_name, thumbnail_type)
-                if not url:
-                    self.result.skipped_no_mapping += 1
+                # Find matching thumbnail
+                matched = match_thumbnail(game_name, available_files)
+
+                if not matched:
+                    self.result.skipped_not_found += 1
+                    self._log(f"    No match: {game_name}")
                     continue
 
-                # Download (or simulate in dry run)
+                # Build download URL
+                url = self._build_download_url(libretro_system, thumbnail_type, matched)
+
                 if self.options.dry_run:
-                    self._log(f"    Would download: {game_name}.png")
-                    self._log(f"      URL: {url}")
+                    if matched != game_name:
+                        self._log(
+                            f"    Would download: {game_name}.png (matched: {matched})"
+                        )
+                    else:
+                        self._log(f"    Would download: {game_name}.png")
                     self.result.downloaded += 1
                     self.result.downloaded_files.append(
                         (system_key, game_name, str(dest_path))
@@ -281,10 +388,18 @@ class ThumbnailDownloader:
                         self.result.downloaded_files.append(
                             (system_key, game_name, str(dest_path))
                         )
-                        self._log(f"    Downloaded: {game_name}.png")
+                        if matched != game_name:
+                            self._log(
+                                f"    Downloaded: {game_name}.png (matched: {matched})"
+                            )
+                        else:
+                            self._log(f"    Downloaded: {game_name}.png")
                     else:
                         self.result.skipped_not_found += 1
-                        self._log(f"    Not found: {game_name}.png")
+                        self._log(f"    Failed: {game_name}.png")
+
+        # Add cache errors to result
+        self.result.errors.extend(self._cache._errors)
 
         return self.result
 
@@ -299,17 +414,6 @@ def download_thumbnails(
 ) -> ThumbnailResult:
     """
     Convenience function to download thumbnails.
-
-    Args:
-        rom_dir: Directory containing consolidated ROMs
-        thumbnail_type: Type of thumbnail (boxart, snap, title)
-        dry_run: If True, don't actually download files
-        verbose: If True, print detailed progress
-        systems_filter: Optional list of systems to process
-        progress_callback: Optional callback for progress messages
-
-    Returns:
-        ThumbnailResult with statistics
     """
     if systems_filter:
         systems_filter = [s.lower() for s in systems_filter]
